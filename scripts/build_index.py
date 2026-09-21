@@ -30,6 +30,20 @@ SEMVER_PATTERN = re.compile(
 )
 HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+# Rozi refuses an index larger than this, which would take discovery offline for every client.
+# Keep it equal to `MAX_INDEX_BYTES` in Rozi's `src/extension_catalog.rs`.
+MAX_INDEX_BYTES = 1024 * 1024
+# Longest accepted value, in characters, per metadata field. They bound each record so one
+# repository cannot crowd the rest out of the index. Keep them equal to the field limits in Rozi's
+# `CatalogEntry::validate` in `src/extension_catalog.rs`.
+MAX_FIELD_CHARS = {
+    "id": 64,
+    "title": 80,
+    "description": 280,
+    "version": 64,
+    "min_rozi": 64,
+    "homepage": 256,
+}
 
 
 class GitHubClient:
@@ -74,7 +88,7 @@ def required_string(table: dict[str, Any], key: str) -> str:
     value = table.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"extension.{key} must be a non-empty string")
-    return value.strip()
+    return bounded(key, value.strip())
 
 
 def optional_string(table: dict[str, Any], key: str) -> str | None:
@@ -83,7 +97,14 @@ def optional_string(table: dict[str, Any], key: str) -> str | None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"extension.{key} must be a non-empty string when present")
-    return value.strip()
+    return bounded(key, value.strip())
+
+
+def bounded(key: str, value: str) -> str:
+    limit = MAX_FIELD_CHARS.get(key)
+    if limit is not None and len(value) > limit:
+        raise ValueError(f"extension.{key} is longer than {limit} characters")
+    return value
 
 
 def contribution_count(manifest: dict[str, Any], key: str) -> int:
@@ -204,13 +225,34 @@ def build(client: GitHubClient, generated_at: datetime | None = None) -> tuple[d
         ) as error:
             skipped.append(f"{full_name}: {error}")
 
-    entries.sort(key=lambda entry: (entry["title"].casefold(), entry["repository"].casefold()))
     timestamp = generated_at or datetime.now(timezone.utc)
-    return {
+    document = {
         "schema_version": 1,
         "generated_at": timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "extensions": entries,
-    }, skipped
+    }
+    skipped.extend(fit_size_limit(document))
+    entries.sort(key=lambda entry: (entry["title"].casefold(), entry["repository"].casefold()))
+    return document, skipped
+
+
+def serialize(document: dict[str, Any]) -> bytes:
+    return (json.dumps(document, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def fit_size_limit(document: dict[str, Any]) -> list[str]:
+    """Drop the least established entries until the index fits the size Rozi accepts.
+
+    Rozi refuses an oversized index whole, so shedding the entries with the fewest stars, then the
+    least recently updated, keeps discovery working for everything else.
+    """
+    entries = document["extensions"]
+    entries.sort(key=lambda entry: (entry["stars"], entry["updated_at"]), reverse=True)
+    dropped = []
+    while entries and len(serialize(document)) > MAX_INDEX_BYTES:
+        entry = entries.pop()
+        dropped.append(f"{entry['repository']}: index would exceed {MAX_INDEX_BYTES} bytes")
+    return dropped
 
 
 def main() -> int:
@@ -219,7 +261,7 @@ def main() -> int:
     args = parser.parse_args()
     document, skipped = build(GitHubClient(os.environ.get("GITHUB_TOKEN")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(document, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    args.output.write_bytes(serialize(document))
     for message in skipped:
         print(f"skipped: {message}", file=sys.stderr)
     print(f"wrote {len(document['extensions'])} extensions to {args.output}")

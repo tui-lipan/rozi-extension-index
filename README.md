@@ -22,6 +22,11 @@ An entry must be a public, non-archived, non-fork repository with:
 - extension API 1;
 - catalog metadata: `id`, `title`, `description`, and `version`.
 
+Metadata is bounded so one repository cannot crowd out the rest: `id`, `version`, and `min_rozi`
+up to 64 characters, `title` up to 80, `description` up to 280, and `homepage` up to 256. A
+repository over a limit is skipped. The published index never exceeds 1 MiB, the most Rozi reads;
+if it would, the entries with the fewest stars, then the least recently updated, are left out.
+
 The generator reads metadata at an exact commit. It never executes repository code or initializes
 submodules. Rozi validates the complete extension again before installation.
 

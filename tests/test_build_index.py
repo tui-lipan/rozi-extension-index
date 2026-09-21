@@ -132,6 +132,47 @@ class BuildIndexTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "api"):
             self.entry_with(("api = 1", "api = true"))
 
+    def test_rejects_overlong_metadata(self):
+        for field, limit in build_index.MAX_FIELD_CHARS.items():
+            if field in {"id", "min_rozi", "homepage"}:
+                continue
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, f"extension.{field} is longer than {limit}"):
+                    self.entry_with((f'{field} = "', f'{field} = "{"x" * limit}'))
+        with self.assertRaisesRegex(ValueError, "longer than 256"):
+            self.entry_with(("github.com/tui-lipan", "github.com/" + "a" * 256))
+        entry = self.entry_with(('description = "Split-aware navigation"', f'description = "{"d" * 280}"'))
+        self.assertEqual(len(entry["description"]), 280)
+
+    def test_sheds_least_established_entries_to_fit_rozi_limit(self):
+        def entry(index, stars):
+            return {
+                "repository": f"owner/repo-{index}",
+                "title": f"Title {index:04}",
+                "stars": stars,
+                "updated_at": "2026-09-21T00:00:00Z",
+                "description": "d" * 280,
+            }
+
+        size = len(build_index.serialize({"extensions": [entry(0, 0)]}))
+        count = 2 * build_index.MAX_INDEX_BYTES // size
+        document = {
+            "schema_version": 1,
+            "generated_at": "2026-09-21T00:00:00Z",
+            "extensions": [entry(index, index) for index in range(count)],
+        }
+        dropped = build_index.fit_size_limit(document)
+        self.assertTrue(dropped)
+        self.assertLessEqual(len(build_index.serialize(document)), build_index.MAX_INDEX_BYTES)
+        kept = {item["stars"] for item in document["extensions"]}
+        self.assertEqual(min(kept), len(dropped), "the fewest-star entries go first")
+
+    def test_writes_compact_ascii_json(self):
+        document, _ = build_index.build(FakeClient(MANIFEST), datetime(2026, 9, 21, tzinfo=timezone.utc))
+        text = build_index.serialize(document)
+        self.assertNotIn(b"\n ", text)
+        self.assertTrue(text.isascii())
+
 
 if __name__ == "__main__":
     unittest.main()
