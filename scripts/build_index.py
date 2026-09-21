@@ -21,9 +21,14 @@ from typing import Any
 API_ROOT = "https://api.github.com"
 ALLOWED_PLATFORMS = {"linux", "macos", "windows", "freebsd", "netbsd"}
 ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+# Semantic Versioning 2.0.0, as Rozi's `semver` parser reads it: no empty identifiers and no
+# leading zeros in numeric pre-release identifiers.
 SEMVER_PATTERN = re.compile(
-    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?$"
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -88,6 +93,24 @@ def contribution_count(manifest: dict[str, Any], key: str) -> int:
     return len(value)
 
 
+def valid_homepage(homepage: str) -> bool:
+    """Accept only what Rozi accepts: an HTTP(S) URL with a real host.
+
+    Rozi rejects a record whose homepage it cannot parse, so anything doubtful is refused here,
+    where the repository is skipped with a reason, rather than shipped to every client.
+    """
+    if any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in homepage):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(homepage)
+        parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or "@" in parsed.netloc:
+        return False
+    return bool(parsed.hostname) and HOST_PATTERN.fullmatch(parsed.hostname) is not None
+
+
 def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> dict[str, Any]:
     if not COMMIT_PATTERN.fullmatch(commit):
         raise ValueError("default branch did not resolve to a full Git commit")
@@ -100,7 +123,8 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     if not ID_PATTERN.fullmatch(extension_id):
         raise ValueError("extension.id is invalid")
     api = extension.get("api")
-    if api != 1:
+    # `True == 1` in Python, but Rozi reads the field as an integer.
+    if type(api) is not int or api != 1:
         raise ValueError("extension.api must be 1")
     min_rozi = optional_string(extension, "min_rozi")
     if min_rozi and not SEMVER_PATTERN.fullmatch(min_rozi):
@@ -111,8 +135,8 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     if len(set(platforms)) != len(platforms) or not set(platforms).issubset(ALLOWED_PLATFORMS):
         raise ValueError("extension.platforms contains duplicates or unsupported platforms")
     homepage = optional_string(extension, "homepage")
-    if homepage and urllib.parse.urlparse(homepage).scheme not in {"http", "https"}:
-        raise ValueError("extension.homepage must be an HTTP(S) URL")
+    if homepage and not valid_homepage(homepage):
+        raise ValueError("extension.homepage must be an HTTP(S) URL with a host")
 
     full_name = required_string(repo, "full_name")
     source = required_string(repo, "clone_url")

@@ -33,13 +33,20 @@
         "description": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
         "api": { "const": 1 },
-        "min_rozi": { "type": ["string", "null"] },
+        "min_rozi": {
+          "type": ["string", "null"],
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-(0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+        },
         "platforms": {
           "type": "array",
           "items": { "enum": ["linux", "macos", "windows", "freebsd", "netbsd"] },
           "uniqueItems": true
         },
-        "homepage": { "type": ["string", "null"] },
+        "homepage": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "pattern": "^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?([/?#][^\\s]*)?$"
+        },
         "stars": { "type": "integer", "minimum": 0 },
         "updated_at": { "type": "string", "format": "date-time" },
         "commands": { "type": "integer", "minimum": 0 },

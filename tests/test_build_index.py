@@ -97,6 +97,41 @@ class BuildIndexTests(unittest.TestCase):
                 ).encode(),
             )
 
+    def entry_with(self, replacement):
+        return build_index.catalog_entry(
+            {
+                "full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "stargazers_count": 0,
+                "updated_at": "2026-09-21T00:00:00Z",
+            },
+            "b" * 40,
+            MANIFEST.replace(*replacement).encode(),
+        )
+
+    def test_rejects_homepages_rozi_cannot_parse(self):
+        # Rozi drops a record it cannot read, so the generator must refuse the same values.
+        for homepage in ["https://", "http:///path", "https://exa mple.com", "https://user@host", "https://host:99999", "ftp://host"]:
+            with self.subTest(homepage=homepage):
+                with self.assertRaisesRegex(ValueError, "homepage"):
+                    self.entry_with(
+                        ('homepage = "https://github.com/tui-lipan/vim-rozi-navigator"', f'homepage = "{homepage}"')
+                    )
+        entry = self.entry_with(("github.com/tui-lipan", "example.org:8080/tui-lipan"))
+        self.assertEqual(entry["homepage"], "https://example.org:8080/tui-lipan/vim-rozi-navigator")
+
+    def test_rejects_versions_rozi_cannot_parse(self):
+        for version in ["1.0.0-01", "1.0.0-a..b", "1.0.0-", "1.0.0+", "01.0.0"]:
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(ValueError, "min_rozi"):
+                    self.entry_with(('min_rozi = "0.0.16"', f'min_rozi = "{version}"'))
+        entry = self.entry_with(('min_rozi = "0.0.16"', 'min_rozi = "1.0.0-rc.1+build.5"'))
+        self.assertEqual(entry["min_rozi"], "1.0.0-rc.1+build.5")
+
+    def test_rejects_boolean_api(self):
+        with self.assertRaisesRegex(ValueError, "api"):
+            self.entry_with(("api = 1", "api = true"))
+
 
 if __name__ == "__main__":
     unittest.main()
