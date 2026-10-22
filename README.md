@@ -34,7 +34,7 @@ submodules. Rozi validates the complete extension again before installation.
 
 ## Why is my extension missing?
 
-The index is rebuilt daily, so a new or changed repository appears after the next build. Every
+The index is rebuilt hourly, so a new or changed repository appears after the next build. Every
 public repository with the topic that the build left out is listed in `v1/skipped.json` with the
 reason, such as a missing `description` or a field over its limit. Fix the manifest on the default
 branch and wait for the next build. `rozi extensions check .` in the checkout lists the same
@@ -47,7 +47,7 @@ python -m unittest discover -s tests
 GITHUB_TOKEN=... python scripts/build_index.py --output public/v1/index.json
 ```
 
-GitHub Actions rebuilds and deploys the index daily and on demand.
+GitHub Actions rebuilds and deploys the index hourly and on demand.
 
 ## License
 
