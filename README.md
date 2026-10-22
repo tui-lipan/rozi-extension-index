@@ -6,7 +6,9 @@ repository root.
 
 The index is generated from public GitHub metadata and manifests. It is not a package repository,
 security audit, endorsement, or review service. Extensions remain executable software installed
-from their original repositories.
+from their original repositories. Rozi runs an extension as the user who installed it, with no
+sandbox, so it can read and change anything that account can. Read an extension's source before
+installing it.
 
 ## Endpoints
 
