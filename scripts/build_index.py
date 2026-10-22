@@ -24,9 +24,10 @@ ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 # Semantic Versioning 2.0.0, as Rozi's `semver` parser reads it: no empty identifiers and no
 # leading zeros in numeric pre-release identifiers.
 SEMVER_PATTERN = re.compile(
-    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
+    re.ASCII,
 )
 HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
@@ -116,6 +117,12 @@ def contribution_count(manifest: dict[str, Any], key: str) -> int:
     return len(value)
 
 
+def valid_semver(version: str) -> bool:
+    """Match Rozi's semver parser, including its u64 core component limit."""
+    match = SEMVER_PATTERN.fullmatch(version)
+    return match is not None and all(int(component) <= (1 << 64) - 1 for component in match.groups())
+
+
 def valid_homepage(homepage: str) -> bool:
     """Accept only what Rozi accepts: an HTTP(S) URL with a real host.
 
@@ -150,7 +157,7 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     if type(api) is not int or api != 1:
         raise ValueError("extension.api must be 1")
     min_rozi = optional_string(extension, "min_rozi")
-    if min_rozi and not SEMVER_PATTERN.fullmatch(min_rozi):
+    if min_rozi and not valid_semver(min_rozi):
         raise ValueError("extension.min_rozi must be a semantic version")
     platforms = extension.get("platforms", [])
     if not isinstance(platforms, list) or any(not isinstance(item, str) for item in platforms):

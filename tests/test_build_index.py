@@ -169,6 +169,31 @@ class BuildIndexTests(unittest.TestCase):
         entry = self.entry_with(('min_rozi = "0.0.16"', 'min_rozi = "1.0.0-rc.1+build.5"'))
         self.assertEqual(entry["min_rozi"], "1.0.0-rc.1+build.5")
 
+    def test_minimum_version_core_components_are_bounded_by_u64(self):
+        for index in range(3):
+            for number, accepted in [(2**64 - 1, True), (2**64, False)]:
+                parts = ["0", "0", "0"]
+                parts[index] = str(number)
+                version = ".".join(parts)
+                with self.subTest(version=version):
+                    manifest = MANIFEST.replace('min_rozi = "0.0.16"', f'min_rozi = "{version}"')
+                    document, report = build_index.build(FakeClient(manifest))
+                    self.assertEqual(bool(document["extensions"]), accepted)
+                    if not accepted:
+                        self.assertIn("min_rozi", report["skipped"][0]["reason"])
+
+    def test_large_numeric_prerelease_and_build_identifiers_remain_valid(self):
+        for version in ["1.0.0-18446744073709551616", "1.0.0+18446744073709551616"]:
+            with self.subTest(version=version):
+                entry = self.entry_with(('min_rozi = "0.0.16"', f'min_rozi = "{version}"'))
+                self.assertEqual(entry["min_rozi"], version)
+
+    def test_semver_digits_are_ascii(self):
+        for version in ["1.٢.0", "1.0.0-1٢"]:
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(ValueError, "min_rozi"):
+                    self.entry_with(('min_rozi = "0.0.16"', f'min_rozi = "{version}"'))
+
     def test_rejects_boolean_api(self):
         with self.assertRaisesRegex(ValueError, "api"):
             self.entry_with(("api = 1", "api = true"))
