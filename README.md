@@ -12,6 +12,8 @@ from their original repositories.
 
 - Index: `https://tui-lipan.github.io/rozi-extension-index/v1/index.json`
 - Schema: `https://tui-lipan.github.io/rozi-extension-index/v1/schema.json`
+- Repositories left out, and why: `https://tui-lipan.github.io/rozi-extension-index/v1/skipped.json`
+- Its schema: `https://tui-lipan.github.io/rozi-extension-index/v1/skipped.schema.json`
 
 ## Inclusion
 
@@ -29,6 +31,14 @@ if it would, the entries with the fewest stars, then the least recently updated,
 
 The generator reads metadata at an exact commit. It never executes repository code or initializes
 submodules. Rozi validates the complete extension again before installation.
+
+## Why is my extension missing?
+
+The index is rebuilt daily, so a new or changed repository appears after the next build. Every
+public repository with the topic that the build left out is listed in `v1/skipped.json` with the
+reason, such as a missing `description` or a field over its limit. Fix the manifest on the default
+branch and wait for the next build. `rozi extensions check .` in the checkout lists the same
+problems under **Discover** before you publish.
 
 ## Development
 

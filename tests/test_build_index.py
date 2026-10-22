@@ -11,27 +11,27 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(build_index)
 
 
+REPOSITORY = {
+    "full_name": "tui-lipan/vim-rozi-navigator",
+    "clone_url": "https://github.com/tui-lipan/vim-rozi-navigator.git",
+    "default_branch": "master",
+    "private": False,
+    "archived": False,
+    "disabled": False,
+    "fork": False,
+    "stargazers_count": 3,
+    "updated_at": "2026-09-21T00:00:00Z",
+}
+
+
 class FakeClient:
-    def __init__(self, manifest: str) -> None:
+    def __init__(self, manifest: str, extra=()) -> None:
         self.manifest = manifest
+        self.extra = list(extra)
 
     def get(self, path, query=None):
         if path == "/search/repositories":
-            return {
-                "items": [
-                    {
-                        "full_name": "tui-lipan/vim-rozi-navigator",
-                        "clone_url": "https://github.com/tui-lipan/vim-rozi-navigator.git",
-                        "default_branch": "master",
-                        "private": False,
-                        "archived": False,
-                        "disabled": False,
-                        "fork": False,
-                        "stargazers_count": 3,
-                        "updated_at": "2026-09-21T00:00:00Z",
-                    }
-                ]
-            }
+            return {"items": [REPOSITORY, *self.extra]}
         if path.endswith("/commits/master"):
             return {"sha": "a" * 40}
         if path.endswith("/contents/extension.toml"):
@@ -67,7 +67,7 @@ class BuildIndexTests(unittest.TestCase):
         document, skipped = build_index.build(
             FakeClient(MANIFEST), datetime(2026, 9, 21, tzinfo=timezone.utc)
         )
-        self.assertEqual(skipped, [])
+        self.assertEqual(skipped["skipped"], [])
         self.assertEqual(document["schema_version"], 1)
         self.assertEqual(document["generated_at"], "2026-09-21T00:00:00Z")
         self.assertEqual(document["extensions"][0]["commit"], "a" * 40)
@@ -80,7 +80,48 @@ class BuildIndexTests(unittest.TestCase):
             datetime(2026, 9, 21, tzinfo=timezone.utc),
         )
         self.assertEqual(document["extensions"], [])
-        self.assertIn("extension.title", skipped[0])
+        self.assertEqual(
+            skipped["skipped"],
+            [
+                {
+                    "repository": "tui-lipan/vim-rozi-navigator",
+                    "reason": "extension.title must be a non-empty string",
+                }
+            ],
+        )
+
+    def test_publishes_why_each_repository_was_left_out_but_never_names_a_private_one(self):
+        def repository(name, **states):
+            return {**REPOSITORY, "full_name": f"owner/{name}", **states}
+
+        document, report = build_index.build(
+            FakeClient(
+                MANIFEST,
+                [
+                    repository("hidden", private=True),
+                    repository("old", archived=True),
+                    repository("copy", fork=True, archived=True),
+                ],
+            ),
+            datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+        self.assertEqual(len(document["extensions"]), 1)
+        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["generated_at"], document["generated_at"])
+        self.assertEqual(
+            report["skipped"],
+            [
+                {"repository": "owner/copy", "reason": "repository is archived and a fork"},
+                {"repository": "owner/old", "reason": "repository is archived"},
+            ],
+        )
+        self.assertNotIn(b"hidden", build_index.serialize(report))
+
+    def test_a_long_reason_is_kept_to_one_bounded_line(self):
+        reason = build_index.short_reason("GitHub returned 500:\n" + "x" * 1000)
+        self.assertEqual(len(reason), build_index.MAX_REASON_CHARS)
+        self.assertNotIn("\n", reason)
+        self.assertTrue(reason.endswith("…"))
 
     def test_rejects_unsupported_platform(self):
         with self.assertRaisesRegex(ValueError, "unsupported platforms"):
@@ -163,6 +204,7 @@ class BuildIndexTests(unittest.TestCase):
         }
         dropped = build_index.fit_size_limit(document)
         self.assertTrue(dropped)
+        self.assertIn("index would exceed", dropped[0][1])
         self.assertLessEqual(len(build_index.serialize(document)), build_index.MAX_INDEX_BYTES)
         kept = {item["stars"] for item in document["extensions"]}
         self.assertEqual(min(kept), len(dropped), "the fewest-star entries go first")

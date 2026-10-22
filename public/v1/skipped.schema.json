@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tui-lipan.github.io/rozi-extension-index/v1/skipped.schema.json",
+  "title": "Rozi extension index v1: repositories left out",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "skipped"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repository", "reason"],
+        "properties": {
+          "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
+    }
+  }
+}
