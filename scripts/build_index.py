@@ -30,12 +30,14 @@ SEMVER_PATTERN = re.compile(
 )
 HOST_PATTERN = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+# Longest skip reason published, in characters. A GitHub error can quote a whole response body.
+MAX_REASON_CHARS = 300
 # Rozi refuses an index larger than this, which would take discovery offline for every client.
 # Keep it equal to `MAX_INDEX_BYTES` in Rozi's `src/extension_catalog.rs`.
 MAX_INDEX_BYTES = 1024 * 1024
 # Longest accepted value, in characters, per metadata field. They bound each record so one
-# repository cannot crowd the rest out of the index. Keep them equal to the field limits in Rozi's
-# `CatalogEntry::validate` in `src/extension_catalog.rs`.
+# repository cannot crowd the rest out of the index. Keep them equal to `FIELD_LIMITS` in Rozi's
+# `src/extension_catalog.rs`.
 MAX_FIELD_CHARS = {
     "id": 64,
     "title": 80,
@@ -192,13 +194,24 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     }
 
 
-def build(client: GitHubClient, generated_at: datetime | None = None) -> tuple[dict[str, Any], list[str]]:
+def build(
+    client: GitHubClient, generated_at: datetime | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The index, and the report of every topic repository it left out and why."""
     entries: list[dict[str, Any]] = []
-    skipped: list[str] = []
+    skipped: list[tuple[str, str]] = []
     for repo in repositories(client):
         full_name = repo.get("full_name", "<unknown>")
-        if repo.get("private") or repo.get("archived") or repo.get("disabled") or repo.get("fork"):
-            skipped.append(f"{full_name}: repository is private, archived, disabled, or a fork")
+        # The report is public: a private repository the token can see is left out unnamed.
+        if repo.get("private") is not False:
+            continue
+        excluded = [
+            description
+            for state, description in (("archived", "archived"), ("disabled", "disabled"), ("fork", "a fork"))
+            if repo.get(state)
+        ]
+        if excluded:
+            skipped.append((full_name, f"repository is {' and '.join(excluded)}"))
             continue
         try:
             branch = required_string(repo, "default_branch")
@@ -223,24 +236,35 @@ def build(client: GitHubClient, generated_at: datetime | None = None) -> tuple[d
             tomllib.TOMLDecodeError,
             RuntimeError,
         ) as error:
-            skipped.append(f"{full_name}: {error}")
+            skipped.append((full_name, str(error)))
 
     timestamp = generated_at or datetime.now(timezone.utc)
-    document = {
-        "schema_version": 1,
-        "generated_at": timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "extensions": entries,
-    }
+    generated = timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    document = {"schema_version": 1, "generated_at": generated, "extensions": entries}
     skipped.extend(fit_size_limit(document))
     entries.sort(key=lambda entry: (entry["title"].casefold(), entry["repository"].casefold()))
-    return document, skipped
+    report = {
+        "schema_version": 1,
+        "generated_at": generated,
+        "skipped": [
+            {"repository": repository, "reason": short_reason(reason)}
+            for repository, reason in sorted(skipped, key=lambda item: item[0].casefold())
+        ],
+    }
+    return document, report
+
+
+def short_reason(reason: str) -> str:
+    """One line, bounded, so an error that quotes a response body stays readable."""
+    line = " ".join(reason.split())
+    return line if len(line) <= MAX_REASON_CHARS else line[: MAX_REASON_CHARS - 1] + "…"
 
 
 def serialize(document: dict[str, Any]) -> bytes:
     return (json.dumps(document, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def fit_size_limit(document: dict[str, Any]) -> list[str]:
+def fit_size_limit(document: dict[str, Any]) -> list[tuple[str, str]]:
     """Drop the least established entries until the index fits the size Rozi accepts.
 
     Rozi refuses an oversized index whole, so shedding the entries with the fewest stars, then the
@@ -251,19 +275,25 @@ def fit_size_limit(document: dict[str, Any]) -> list[str]:
     dropped = []
     while entries and len(serialize(document)) > MAX_INDEX_BYTES:
         entry = entries.pop()
-        dropped.append(f"{entry['repository']}: index would exceed {MAX_INDEX_BYTES} bytes")
+        dropped.append((entry["repository"], f"index would exceed {MAX_INDEX_BYTES} bytes"))
     return dropped
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--skipped-output", type=Path, help="also write the report of repositories left out"
+    )
     args = parser.parse_args()
-    document, skipped = build(GitHubClient(os.environ.get("GITHUB_TOKEN")))
+    document, report = build(GitHubClient(os.environ.get("GITHUB_TOKEN")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(serialize(document))
-    for message in skipped:
-        print(f"skipped: {message}", file=sys.stderr)
+    if args.skipped_output:
+        args.skipped_output.parent.mkdir(parents=True, exist_ok=True)
+        args.skipped_output.write_bytes(serialize(report))
+    for item in report["skipped"]:
+        print(f"skipped: {item['repository']}: {item['reason']}", file=sys.stderr)
     print(f"wrote {len(document['extensions'])} extensions to {args.output}")
     return 0
 
