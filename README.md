@@ -35,7 +35,9 @@ and `/`. Each must be a PNG, JPEG, or WebP file committed at the indexed commit,
 index publishes the paths, only for an entry that has any; a reader loads them from
 `https://raw.githubusercontent.com/<repository>/<commit>/<path>`.
 
-Readers ignore fields they do not know, so the index may add fields within a schema version. Rozi
+Readers ignore fields they do not know, so a schema version may gain optional, informational
+fields. A field older clients must understand to stay correct or safe needs a new
+`schema_version`. Rozi
 releases before 0.0.36 still drop a record with an unknown field; omitting empty `screenshots`
 keeps every other record listed for them.
 
