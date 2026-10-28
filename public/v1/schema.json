@@ -19,7 +19,7 @@
       "additionalProperties": false,
       "required": [
         "repository", "source", "commit", "manifest_path", "id", "title", "description",
-        "version", "api", "min_rozi", "platforms", "homepage", "stars", "updated_at",
+        "version", "api", "min_rozi", "platforms", "homepage", "screenshots", "stars", "updated_at",
         "commands", "services", "agents", "sidebar_tabs", "navigation_targets",
         "suggested_keybindings"
       ],
@@ -48,6 +48,17 @@
           "format": "uri",
           "maxLength": 256,
           "pattern": "^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?([/?#][^\\s]*)?$"
+        },
+        "screenshots": {
+          "description": "Image paths relative to the repository root at `commit`.",
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 256,
+            "pattern": "^(?!.*(^|/)\\.{1,2}(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*\\.(png|jpg|jpeg|webp)$"
+          }
         },
         "stars": { "type": "integer", "minimum": 0 },
         "updated_at": { "type": "string", "format": "date-time" },

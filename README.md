@@ -29,6 +29,12 @@ up to 64 characters, `title` up to 80, `description` up to 280, and `homepage` u
 repository over a limit is skipped. The published index never exceeds 1 MiB, the most Rozi reads;
 if it would, the entries with the fewest stars, then the least recently updated, are left out.
 
+An optional `screenshots` array in `[extension]` lists up to 4 images for the extension gallery on
+the Rozi website, as paths from the repository root using only ASCII letters, digits, `.`, `_`, `-`,
+and `/`. Each must be a PNG, JPEG, or WebP file committed at the indexed commit, at most 2 MiB. The
+index publishes the paths; a reader loads them from
+`https://raw.githubusercontent.com/<repository>/<commit>/<path>`.
+
 The generator reads metadata at an exact commit. It never executes repository code or initializes
 submodules. Rozi validates the complete extension again before installation.
 
