@@ -93,7 +93,8 @@ class BuildIndexTests(unittest.TestCase):
         self.assertEqual(client.queries, [{"ref": "a" * 40}])
 
         plain, _ = build_index.build(FakeClient(MANIFEST), datetime(2026, 9, 21, tzinfo=timezone.utc))
-        self.assertEqual(plain["extensions"][0]["screenshots"], [])
+        # Older Rozi releases drop a record with a field they do not know.
+        self.assertNotIn("screenshots", plain["extensions"][0])
 
     def test_skips_screenshots_that_are_not_bounded_files(self):
         manifest = MANIFEST.replace('api = 1\n', 'api = 1\nscreenshots = ["docs/picker.png"]\n')

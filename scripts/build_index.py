@@ -235,7 +235,7 @@ def catalog_entry(
     if not isinstance(stars, int) or stars < 0:
         raise ValueError("repository star count is invalid")
 
-    return {
+    entry = {
         "repository": full_name,
         "source": source,
         "commit": commit,
@@ -248,7 +248,6 @@ def catalog_entry(
         "min_rozi": min_rozi,
         "platforms": platforms,
         "homepage": homepage,
-        "screenshots": screenshot_paths,
         "stars": stars,
         "updated_at": updated_at,
         "commands": contribution_count(manifest, "commands"),
@@ -258,6 +257,11 @@ def catalog_entry(
         "navigation_targets": contribution_count(manifest, "navigation_targets"),
         "suggested_keybindings": contribution_count(manifest, "suggested_keybindings"),
     }
+    # Only when there are any: Rozi releases before 0.0.36 drop a record with a field they do not
+    # know, and they cannot install an extension whose manifest lists screenshots anyway.
+    if screenshot_paths:
+        entry["screenshots"] = screenshot_paths
+    return entry
 
 
 def build(
