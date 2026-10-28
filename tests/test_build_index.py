@@ -25,9 +25,12 @@ REPOSITORY = {
 
 
 class FakeClient:
-    def __init__(self, manifest: str, extra=()) -> None:
+    def __init__(self, manifest: str, extra=(), files=None) -> None:
         self.manifest = manifest
         self.extra = list(extra)
+        # Repository paths other than the manifest, as GitHub's contents endpoint describes them.
+        self.files = files or {}
+        self.queries = []
 
     def get(self, path, query=None):
         if path == "/search/repositories":
@@ -39,6 +42,13 @@ class FakeClient:
                 "encoding": "base64",
                 "content": base64.b64encode(self.manifest.encode()).decode(),
             }
+        prefix = f"/repos/{REPOSITORY['full_name']}/contents/"
+        if path.startswith(prefix):
+            self.queries.append(query)
+            try:
+                return self.files[path.removeprefix(prefix)]
+            except KeyError:
+                raise build_index.NotFound(path) from None
         raise AssertionError(path)
 
 
@@ -73,6 +83,33 @@ class BuildIndexTests(unittest.TestCase):
         self.assertEqual(document["extensions"][0]["commit"], "a" * 40)
         self.assertEqual(document["extensions"][0]["navigation_targets"], 1)
         self.assertEqual(document["extensions"][0]["suggested_keybindings"], 1)
+
+    def test_lists_screenshots_that_are_files_at_the_indexed_commit(self):
+        manifest = MANIFEST.replace('api = 1\n', 'api = 1\nscreenshots = ["docs/picker.png"]\n')
+        client = FakeClient(manifest, files={"docs/picker.png": {"type": "file", "size": 1024}})
+        document, skipped = build_index.build(client, datetime(2026, 9, 21, tzinfo=timezone.utc))
+        self.assertEqual(skipped["skipped"], [])
+        self.assertEqual(document["extensions"][0]["screenshots"], ["docs/picker.png"])
+        self.assertEqual(client.queries, [{"ref": "a" * 40}])
+
+        plain, _ = build_index.build(FakeClient(MANIFEST), datetime(2026, 9, 21, tzinfo=timezone.utc))
+        # Older Rozi releases drop a record with a field they do not know.
+        self.assertNotIn("screenshots", plain["extensions"][0])
+
+    def test_skips_screenshots_that_are_not_bounded_files(self):
+        manifest = MANIFEST.replace('api = 1\n', 'api = 1\nscreenshots = ["docs/picker.png"]\n')
+        for name, files, reason in [
+            ("missing", {}, "is not a file"),
+            ("directory", {"docs/picker.png": [{"type": "file"}]}, "is not a file"),
+            ("symlink", {"docs/picker.png": {"type": "symlink", "size": 10}}, "is not a file"),
+            ("too large", {"docs/picker.png": {"type": "file", "size": build_index.MAX_SCREENSHOT_BYTES + 1}}, "larger than"),
+        ]:
+            with self.subTest(name):
+                document, skipped = build_index.build(
+                    FakeClient(manifest, files=files), datetime(2026, 9, 21, tzinfo=timezone.utc)
+                )
+                self.assertEqual(document["extensions"], [])
+                self.assertIn(reason, skipped["skipped"][0]["reason"])
 
     def test_skips_manifest_without_catalog_metadata(self):
         document, skipped = build_index.build(

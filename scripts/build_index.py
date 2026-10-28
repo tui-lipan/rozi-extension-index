@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 API_ROOT = "https://api.github.com"
 ALLOWED_PLATFORMS = {"linux", "macos", "windows", "freebsd", "netbsd"}
@@ -47,6 +47,17 @@ MAX_FIELD_CHARS = {
     "min_rozi": 64,
     "homepage": 256,
 }
+# Most screenshots one extension lists, and the largest file each may be. Keep equal to
+# `MAX_SCREENSHOTS` and `MAX_SCREENSHOT_BYTES` in Rozi's `src/extension_catalog.rs`.
+MAX_SCREENSHOTS = 4
+MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
+MAX_SCREENSHOT_PATH_CHARS = 256
+SCREENSHOT_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
+SCREENSHOT_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+
+
+class NotFound(RuntimeError):
+    """GitHub has nothing at the requested path."""
 
 
 class GitHubClient:
@@ -70,6 +81,8 @@ class GitHubClient:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")
+            if error.code == 404:
+                raise NotFound(f"GitHub returned 404 for {url}") from error
             raise RuntimeError(f"GitHub returned {error.code} for {url}: {detail}") from error
 
 
@@ -141,7 +154,51 @@ def valid_homepage(homepage: str) -> bool:
     return bool(parsed.hostname) and HOST_PATTERN.fullmatch(parsed.hostname) is not None
 
 
-def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> dict[str, Any]:
+def screenshot_path_problem(path: str) -> str | None:
+    """Match Rozi's `screenshot_path_problem`: a plain repository-relative image path.
+
+    The path becomes part of a URL the index website loads, so nothing that needs escaping or
+    could climb out of the repository is accepted.
+    """
+    if not path or len(path) > MAX_SCREENSHOT_PATH_CHARS:
+        return f"must be 1 to {MAX_SCREENSHOT_PATH_CHARS} characters"
+    if not SCREENSHOT_PATH_PATTERN.fullmatch(path):
+        return "may use only ASCII letters, digits, '.', '_', '-', and '/'"
+    if any(segment in {"", ".", ".."} for segment in path.split("/")):
+        return "must be relative to the repository root, without empty, '.', or '..' segments"
+    if "." not in path or path.rsplit(".", 1)[1] not in SCREENSHOT_EXTENSIONS:
+        return "must end in " + ", ".join(f".{extension}" for extension in sorted(SCREENSHOT_EXTENSIONS))
+    return None
+
+
+def screenshots(extension: dict[str, Any], file_size: Callable[[str], int | None]) -> list[str]:
+    """The declared screenshot paths, each a regular file of bounded size at the indexed commit."""
+    paths = extension.get("screenshots", [])
+    if not isinstance(paths, list) or any(not isinstance(path, str) for path in paths):
+        raise ValueError("extension.screenshots must be an array of strings")
+    if len(paths) > MAX_SCREENSHOTS:
+        raise ValueError(f"extension.screenshots lists more than {MAX_SCREENSHOTS} images")
+    if len(set(paths)) != len(paths):
+        raise ValueError("extension.screenshots contains duplicates")
+    for path in paths:
+        problem = screenshot_path_problem(path)
+        if problem:
+            raise ValueError(f"screenshot {path!r} {problem}")
+        size = file_size(path)
+        if size is None:
+            raise ValueError(f"screenshot {path!r} is not a file in the repository")
+        if size > MAX_SCREENSHOT_BYTES:
+            raise ValueError(f"screenshot {path!r} is larger than {MAX_SCREENSHOT_BYTES} bytes")
+    return paths
+
+
+def catalog_entry(
+    repo: dict[str, Any],
+    commit: str,
+    manifest_bytes: bytes,
+    file_size: Callable[[str], int | None] = lambda _path: None,
+) -> dict[str, Any]:
+    """One index record. `file_size` gives the size of a regular file at `commit`, else None."""
     if not COMMIT_PATTERN.fullmatch(commit):
         raise ValueError("default branch did not resolve to a full Git commit")
     manifest = tomllib.loads(manifest_bytes.decode("utf-8"))
@@ -167,6 +224,7 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     homepage = optional_string(extension, "homepage")
     if homepage and not valid_homepage(homepage):
         raise ValueError("extension.homepage must be an HTTP(S) URL with a host")
+    screenshot_paths = screenshots(extension, file_size)
 
     full_name = required_string(repo, "full_name")
     source = required_string(repo, "clone_url")
@@ -177,7 +235,7 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
     if not isinstance(stars, int) or stars < 0:
         raise ValueError("repository star count is invalid")
 
-    return {
+    entry = {
         "repository": full_name,
         "source": source,
         "commit": commit,
@@ -199,6 +257,11 @@ def catalog_entry(repo: dict[str, Any], commit: str, manifest_bytes: bytes) -> d
         "navigation_targets": contribution_count(manifest, "navigation_targets"),
         "suggested_keybindings": contribution_count(manifest, "suggested_keybindings"),
     }
+    # Only when there are any: Rozi releases before 0.0.36 drop a record with a field they do not
+    # know, and they cannot install an extension whose manifest lists screenshots anyway.
+    if screenshot_paths:
+        entry["screenshots"] = screenshot_paths
+    return entry
 
 
 def build(
@@ -233,7 +296,14 @@ def build(
             if not isinstance(content, str):
                 raise ValueError("extension.toml has no content")
             encoded = "".join(content.split())
-            entries.append(catalog_entry(repo, commit, base64.b64decode(encoded, validate=True)))
+            entries.append(
+                catalog_entry(
+                    repo,
+                    commit,
+                    base64.b64decode(encoded, validate=True),
+                    lambda path: file_size(client, full_name, commit, path),
+                )
+            )
         except (
             binascii.Error,
             KeyError,
@@ -259,6 +329,18 @@ def build(
         ],
     }
     return document, report
+
+
+def file_size(client: GitHubClient, full_name: str, commit: str, path: str) -> int | None:
+    """Size of a regular file at `commit`; None for a missing path, directory, symlink, or submodule."""
+    try:
+        document = client.get(f"/repos/{full_name}/contents/{path}", {"ref": commit})
+    except NotFound:
+        return None
+    if not isinstance(document, dict) or document.get("type") != "file":
+        return None
+    size = document.get("size")
+    return size if type(size) is int and size >= 0 else None
 
 
 def short_reason(reason: str) -> str:
